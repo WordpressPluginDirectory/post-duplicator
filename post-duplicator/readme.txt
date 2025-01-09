@@ -2,8 +2,8 @@
 Contributors: metaphorcreations
 Tags: posts, post, duplicate, duplication
 Requires at least: 4.0
-Tested up to: 6.5.2
-Stable tag: 2.34
+Tested up to: 6.6.1
+Stable tag: 2.37
 License: GPL2
 
 Creates functionality to duplicate any and all post types, including taxonomies & custom fields.
@@ -40,6 +40,15 @@ Check out the 'Installation' tab.
 2. View of the settings page
 
 == Changelog ==
+
+= 2.37 [2025-01-08] =
+* Security update. Disabled duplicate post ability of non-published posts by non-authors.
+
+= 2.36 [2024-09-02] =
+* Security update. Fixed bug that allowed non-author to duplicate post.
+
+= 2.35 [2024-05-14] =
+* Allowed for center tag to be duplicated
 
 = 2.34 [2024-04-27] =
 * Added mtphr_post_duplicator_meta_{$key}_enabled filter to disable meta from duplicating
@@ -173,4 +182,4 @@ Must upgrade in order for the plugin to work. The file paths where initially wro
 
 == Upgrade Notice ==
 
-Added meta filters and disabled WooCommerce review count meta from duplicating
+Security update. Disabled duplicate post ability of non-published posts by non-authors.

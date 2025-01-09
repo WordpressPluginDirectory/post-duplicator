@@ -66,7 +66,9 @@ function mtphr_duplicate_post( $original_id, $args=array(), $do_action=true ) {
 	unset( $duplicate['comment_count'] );
 
 	//$duplicate['post_content'] = wp_slash( str_replace( array( '\r\n', '\r', '\n' ), '<br />', wp_kses_post( $duplicate['post_content'] ) ) ); 
+	add_filter( 'wp_kses_allowed_html', 'mtphr_duplicate_post_additional_kses', 10, 2 );
 	$duplicate['post_content'] = wp_slash( wp_kses_post( $duplicate['post_content'] ) ); 
+	remove_filter( 'wp_kses_allowed_html', 'mtphr_duplicate_post_additional_kses', 10, 2 );
 
 	// Insert the post into the database
 	$duplicate_id = wp_insert_post( $duplicate );
@@ -128,6 +130,20 @@ function m4c_duplicate_post() {
 	
 	// Get variables
 	$original_id  = intval( $_POST['original_id'] );
+  $author_id = get_post_field( 'post_author', $original_id );
+
+  $settings = get_mtphr_post_duplicator_settings();
+  if ( 'current_user' === $settings['post_duplication'] ) {
+    if ( get_current_user_id() != $author_id ) {
+      return wp_send_json( [] );
+    }
+  }
+  if ( get_current_user_id() != $author_id ) {
+    $orig = get_post( $original_id, 'ARRAY_A' );
+    if ( 'publish' != $orig['post_status'] || '' != $orig['post_password'] ) {
+      return wp_send_json( [] );
+    }
+  }
 	
 	// Duplicate the post
 	$data = mtphr_duplicate_post( $original_id );
@@ -135,3 +151,17 @@ function m4c_duplicate_post() {
 	wp_send_json( $data );
 }
 add_action( 'wp_ajax_m4c_duplicate_post', 'm4c_duplicate_post' );
+
+
+// Allow additional tags to wp_kses_post
+function mtphr_duplicate_post_additional_kses( $allowed_tags ) {
+	// Allow the center tag with its attributes
+	$allowed_tags['center'] = array(
+			'align' => true,
+			'class' => true,
+			'id' => true,
+			'style' => true,
+	);
+	
+	return $allowed_tags;
+}
