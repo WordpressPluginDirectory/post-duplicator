@@ -1,10 +1,5 @@
 <?php
-/**
- * Version: 1.0.0
- */
-
-// Update the namespace after every update!!!
-namespace Mtphr\PostDuplicator;
+namespace Mtphr;
 
 /**
  * Create the class
@@ -13,10 +8,13 @@ final class Settings {
 
   private static $instance;
 
+  private $version = '1.0.0';
   private $id = 'mtphr';
   private $textdomain = 'mtphr-settings';
   private $settings_dir = '';
   private $settings_url = '';
+  private $settings_ready = false;
+  private $fields_ready = false;
 
   private $admin_pages = [];
   private $options = [];
@@ -28,7 +26,8 @@ final class Settings {
   private $encryption_settings = [];
   private $type_settings = [];
   private $noupdate_settings = [];
-  private $default_sanitizer = 'sanitize_text_field';
+  private $admin_notices = [];
+  private $default_sanitizer = 'wp_kses_post';
   private $encryption_key_1 = '7Q@_DvLVTiHPEA';
   private $encryption_key_2 = 'YgM2iCX-BtoBpJ';
 
@@ -41,6 +40,11 @@ final class Settings {
       add_action( 'admin_menu', array( self::$instance, 'create_admin_pages' ) );
       add_action( 'admin_enqueue_scripts', array( self::$instance, 'enqueue_scripts' ) );
       add_action( 'rest_api_init', array( self::$instance, 'register_routes' ) );
+      add_action( 'admin_notices', array( self::$instance, 'admin_notices' ) );
+
+      list( $path, $url ) = self::$instance->get_path( dirname( dirname( __FILE__ ) ) );
+      self::$instance->settings_dir = $path . 'mtphr-settings/';
+      self::$instance->settings_url = $url . 'mtphr-settings/';
     }
     return self::$instance;
   }
@@ -59,37 +63,71 @@ final class Settings {
 		_doing_it_wrong( __FUNCTION__, __( 'Cheatin&#8217; huh?', self::$instance->textdomain ), '1.0.0' );
 	}
 
-  /**
-   * Set a custom id for the settings
-   */
-  public function init( $args = [] ) {
-    if ( isset( $args['id'] ) ) {
-      self::$instance->id = esc_attr( str_replace( [' ', '-'], '', $args['id'] ) );
-    }
-    if ( isset( $args['textdomain'] ) ) {
-      self::$instance->textdomain = esc_attr( $args['textdomain'] );
-    }
-    if ( isset( $args['settings_dir'] ) ) {
-      self::$instance->settings_dir = esc_attr( trailingslashit( $args['settings_dir'] ) );
-    }
-    if ( isset( $args['settings_url'] ) ) {
-      self::$instance->settings_url = esc_url( trailingslashit( $args['settings_url'] ) );
-    }
-  }
+  private function get_path( $path = '' ) {
+		// Plugin base path.
+		$path       = wp_normalize_path( untrailingslashit( $path ) );
+		$themes_dir = wp_normalize_path( untrailingslashit( dirname( get_stylesheet_directory() ) ) );
+
+		// Default URL.
+		$url = plugins_url( '', $path . '/' . basename( $path ) . '.php' );
+
+		// Included into themes.
+		if (
+			0 !== strpos( $path, wp_normalize_path( WP_PLUGIN_DIR ) )
+			&& 0 !== strpos( $path, wp_normalize_path( WPMU_PLUGIN_DIR ) )
+			&& 0 === strpos( $path, $themes_dir )
+		) {
+			$themes_url = untrailingslashit( dirname( get_stylesheet_directory_uri() ) );
+			$url        = str_replace( $themes_dir, $themes_url, $path );
+		}
+
+		$path = trailingslashit( $path );
+		$url  = trailingslashit( $url );
+
+		return array( $path, $url );
+	}
 
   /**
    * Init settings
    */
-  public function init_settings( $option, $settings ) {
-    if ( ! is_array( $settings ) ) {
-      return false;
-    }
-    if ( is_array( $settings ) && ! empty( $settings ) ) {
-      foreach ( $settings as $setting ) {
-        $setting['option'] = $option;
-        self::$instance->process_setting_data( $setting );
-      }
-    }
+  // public function init_settings( $option, $settings ) {
+  //   if ( ! is_array( $settings ) ) {
+  //     return false;
+  //   }
+  //   if ( is_array( $settings ) && ! empty( $settings ) ) {
+  //     foreach ( $settings as $setting ) {
+  //       $setting['option'] = $option;
+  //       self::$instance->process_setting_data( $setting );
+  //     }
+  //   }
+  // }
+
+  /**
+   * Set the settings ready
+   */
+  public function set_settings_ready( $ready ) {
+    return self::$instance->settings_ready = boolval( $ready );
+  }
+
+  /**
+   * Get the settings ready
+   */
+  public function get_settings_ready() {
+    return self::$instance->settings_ready;
+  }
+
+  /**
+   * Set the fields ready
+   */
+  public function set_fields_ready( $ready ) {
+    return self::$instance->fields_ready = boolval( $ready );
+  }
+
+  /**
+   * Get the fields ready
+   */
+  public function get_fields_ready() {
+    return self::$instance->fields_ready;
   }
 
   /**
@@ -262,6 +300,15 @@ final class Settings {
     if ( ! isset( $section['id'] ) || ! isset( $section['slug'] ) || ! isset( $section['menu_slug'] ) ) {
       return false;
     }
+
+    // Check if a section with the same ID already exists
+    $ids = array_column( $sections, 'id' ); // Extract all existing IDs
+    if ( in_array( $section['id'], $ids ) ) {
+      $message = "<p><strong>{$section['id']}</strong> can not be added for <strong>{$section['menu_slug']}</strong>. This section id is already being used with mtphr-settings.</p>";
+      self::$instance->add_admin_notice( 'error', $message );
+      return false;
+    }
+
     if ( ! isset( $section['label'] ) ) {
       $section['label'] = ucfirst( $section['id'] );
     }
@@ -565,6 +612,27 @@ final class Settings {
   }
 
   /**
+   * Get default values
+   */
+  public function get_default_values( $options = false ) {
+    $default_values = self::$instance->default_values;
+    if ( $options ) {
+      if ( is_array( $options ) ) {
+        if ( ! empty( $options ) ) {
+          $values = [];
+          foreach ( $options as $option ) {
+            $values[$option] = isset( $default_values[$option] ) ? $default_values[$option] : [];
+          }
+          return $values;
+        }
+      } else {
+        return isset( $default_values[$options] ) ? $default_values[$options] : [];
+      }
+    }
+    return $default_values;
+  }
+
+  /**
    * Add sanitize settings
    */
   public function add_sanitize_settings( $option, $values = [] ) {
@@ -578,6 +646,27 @@ final class Settings {
     $sanitize_settings[$option] = $sanitize_option_settings;
     self::$instance->sanitize_settings = $sanitize_settings;
 
+    return $sanitize_settings;
+  }
+
+  /**
+   * Get sanitize settings
+   */
+  public function get_sanitize_settings( $options = false ) {
+    $sanitize_settings = self::$instance->sanitize_settings;
+    if ( $options ) {
+      if ( is_array( $options ) ) {
+        if ( ! empty( $options ) ) {
+          $settings = [];
+          foreach ( $options as $option ) {
+            $settings[$option] = isset( $sanitize_settings[$option] ) ? $sanitize_settings[$option] : [];
+          }
+          return $settings;
+        }
+      } else {
+        return isset( $sanitize_settings[$options] ) ? $sanitize_settings[$options] : [];
+      }
+    }
     return $sanitize_settings;
   }
 
@@ -604,50 +693,7 @@ final class Settings {
     }
     $encryption_settings[$option] = $encryption_option_settings;
     self::$instance->encryption_settings = $encryption_settings;
-
     return $encryption_settings;
-  }
-
-  /**
-   * Get default values
-   */
-  public function get_default_values( $options = false ) {
-    $default_values = self::$instance->default_values;
-    if ( $options ) {
-      if ( is_array( $options ) ) {
-        if ( ! empty( $options ) ) {
-          $values = [];
-          foreach ( $options as $option ) {
-            $values[$option] = isset( $default_values[$option] ) ? $default_values[$option] : [];
-          }
-          return $values;
-        }
-      } else {
-        return isset( $default_values[$options] ) ? $default_values[$options] : [];
-      }
-    }
-    return $default_values;
-  }
-
-  /**
-   * Get sanitize settings
-   */
-  public function get_sanitize_settings( $options = false ) {
-    $sanitize_settings = self::$instance->sanitize_settings;
-    if ( $options ) {
-      if ( is_array( $options ) ) {
-        if ( ! empty( $options ) ) {
-          $settings = [];
-          foreach ( $options as $option ) {
-            $settings[$option] = isset( $sanitize_settings[$option] ) ? $sanitize_settings[$option] : [];
-          }
-          return $settings;
-        }
-      } else {
-        return isset( $sanitize_settings[$options] ) ? $sanitize_settings[$options] : [];
-      }
-    }
-    return $sanitize_settings;
   }
 
   /**
@@ -747,6 +793,7 @@ final class Settings {
     }
     
     // If the option values have been compiled, return them
+    $cache = false;
     if ( isset( self::$instance->values[$option] ) && $cache ) {
       return self::$instance->values[$option];
     }
@@ -867,7 +914,7 @@ final class Settings {
     );
 
     // Add a hook for other scripts to register custom fields
-    do_action( 'mtphrSettings/enqueueFields', self::$instance->get_id() . 'Registry' );
+    do_action( 'mtphrSettings/enqueue_fields', self::$instance->get_id() . 'Registry' );
 
     $asset_file = include( self::$instance->settings_dir . 'assets/build/mtphrSettings.asset.php' );
     wp_enqueue_style(
@@ -1233,5 +1280,36 @@ final class Settings {
     // Attempt to JSON-decode the result to restore arrays if originally encrypted from an array
     $decoded = json_decode( $output, true );
     return (json_last_error() === JSON_ERROR_NONE) ? $decoded : $output;
+  }
+
+  private function get_admin_notices() {
+    $admin_notices = self::$instance->admin_notices;
+    if ( ! is_array( $admin_notices ) ) {
+      return [];
+    }
+    return $admin_notices;
+  }
+
+  private function add_admin_notice( $type, $message ) {
+    $admin_notices = self::$instance->get_admin_notices();
+    $admin_notices[] = [
+      'type' => $type,
+      'message' => $message,
+    ];
+    self::$instance->admin_notices = $admin_notices;
+  }
+
+  /**
+   * Display admin notices
+   */
+  public function admin_notices() {
+    $admin_notices = self::$instance->get_admin_notices();
+    if ( is_array( $admin_notices ) && ! empty( $admin_notices ) ) {
+      foreach ( $admin_notices as $notice ) {
+        echo '<div class="' . $notice['type'] . '">';
+          echo wp_kses_post( $notice['message'] );
+        echo '</div>';
+      }
+    }
   }
 }
