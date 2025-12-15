@@ -61,3 +61,50 @@ function user_can_duplicate( $post ) {
   
   return true;
 }
+
+/**
+ * Check if a post type supports authors
+ */
+function post_type_supports_author( $post_type ) {
+	$post_type_obj = get_post_type_object( $post_type );
+	if ( ! $post_type_obj ) {
+		return false;
+	}
+	return post_type_supports( $post_type, 'author' );
+}
+
+/**
+ * Get author support information for all post types
+ */
+function get_post_types_author_support() {
+	$post_types = get_post_types( array(), 'objects' );
+	$author_support = array();
+	
+	foreach ( $post_types as $post_type => $post_type_obj ) {
+		// Skip system post types
+		if ( in_array( $post_type, array( 'attachment', 'revision', 'nav_menu_item', 'wooframework' ) ) ) {
+			continue;
+		}
+		$author_support[ $post_type ] = post_type_supports( $post_type, 'author' );
+	}
+	
+	return $author_support;
+}
+
+/**
+ * Get hierarchical support information for all post types
+ */
+function get_post_types_hierarchical_support() {
+	$post_types = get_post_types( array(), 'objects' );
+	$hierarchical_support = array();
+	
+	foreach ( $post_types as $post_type => $post_type_obj ) {
+		// Skip system post types
+		if ( in_array( $post_type, array( 'attachment', 'revision', 'nav_menu_item', 'wooframework' ) ) ) {
+			continue;
+		}
+		$hierarchical_support[ $post_type ] = $post_type_obj->hierarchical;
+	}
+	
+	return $hierarchical_support;
+}
