@@ -87,12 +87,17 @@ function enqueue_scripts() {
     }, ARRAY_FILTER_USE_KEY ),
     'postTypesAuthorSupport' => get_post_types_author_support(),
     'postTypesHierarchicalSupport' => get_post_types_hierarchical_support(),
+    'postTypesPublicSupport' => get_post_types_public_support(),
     'statusChoices' => [
       'draft' => esc_html__( 'Draft', 'post-duplicator' ),
       'publish' => esc_html__( 'Published', 'post-duplicator' ),
       'pending' => esc_html__( 'Pending', 'post-duplicator' ),
       'private' => esc_html__( 'Private', 'post-duplicator' ),
     ],
+    'mode' => isset( $settings['mode'] ) ? $settings['mode'] : 'advanced',
+    'singleAfterDuplicationAction' => isset( $settings['single_after_duplication_action'] ) ? $settings['single_after_duplication_action'] : 'notice',
+    'listSingleAfterDuplicationAction' => isset( $settings['list_single_after_duplication_action'] ) ? $settings['list_single_after_duplication_action'] : 'notice',
+    'listMultipleAfterDuplicationAction' => isset( $settings['list_multiple_after_duplication_action'] ) ? $settings['list_multiple_after_duplication_action'] : 'notice',
   ] );
 
   // Enqueue Gutenberg button on block editor pages (but not in widgets editor)
@@ -156,12 +161,17 @@ function enqueue_scripts() {
       }, ARRAY_FILTER_USE_KEY ),
       'postTypesAuthorSupport' => get_post_types_author_support(),
       'postTypesHierarchicalSupport' => get_post_types_hierarchical_support(),
+      'postTypesPublicSupport' => get_post_types_public_support(),
       'statusChoices' => [
         'draft' => esc_html__( 'Draft', 'post-duplicator' ),
         'publish' => esc_html__( 'Published', 'post-duplicator' ),
         'pending' => esc_html__( 'Pending', 'post-duplicator' ),
         'private' => esc_html__( 'Private', 'post-duplicator' ),
       ],
+      'mode' => isset( $settings['mode'] ) ? $settings['mode'] : 'advanced',
+      'singleAfterDuplicationAction' => isset( $settings['single_after_duplication_action'] ) ? $settings['single_after_duplication_action'] : 'notice',
+      'listSingleAfterDuplicationAction' => isset( $settings['list_single_after_duplication_action'] ) ? $settings['list_single_after_duplication_action'] : 'notice',
+      'listMultipleAfterDuplicationAction' => isset( $settings['list_multiple_after_duplication_action'] ) ? $settings['list_multiple_after_duplication_action'] : 'notice',
     ] );
   }
 }

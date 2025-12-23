@@ -26,10 +26,38 @@ function register_routes() {
     ),
   ) );
   
+  register_rest_route( 'post-duplicator/v1', 'post-full-data/(?P<id>\d+)', array(
+    'methods' => 'GET',
+    'permission_callback' => __NAMESPACE__ . '\get_post_data_permissions',
+    'callback' => __NAMESPACE__ . '\get_post_full_data',
+    'args' => array(
+      'id' => array(
+        'validate_callback' => function( $param ) {
+          return is_numeric( $param );
+        },
+      ),
+    ),
+  ) );
+  
   register_rest_route( 'post-duplicator/v1', 'parent-posts', array(
     'methods' => 'GET',
-    'permission_callback' => '__return_true',
+    'permission_callback' => __NAMESPACE__ . '\get_parent_posts_permissions',
     'callback' => __NAMESPACE__ . '\get_parent_posts',
+    'args' => array(
+      'post_type' => array(
+        'validate_callback' => function( $param ) {
+          // Validate that it's a valid post type slug
+          return post_type_exists( sanitize_key( $param ) );
+        },
+        'sanitize_callback' => 'sanitize_key',
+      ),
+      'exclude_id' => array(
+        'validate_callback' => function( $param ) {
+          return is_numeric( $param );
+        },
+        'sanitize_callback' => 'absint',
+      ),
+    ),
   ) );
 }
 
@@ -113,17 +141,15 @@ function get_post_data( $request ) {
   // Get custom meta fields
   $custom_meta_data = array();
   $custom_fields = get_post_custom( $post_id );
+  $excluded_meta_keys = get_excluded_meta_keys();
   
   foreach ( $custom_fields as $key => $values ) {
-    // Skip WordPress internal meta keys
-    if ( strpos( $key, '_' ) === 0 && ! in_array( $key, array( '_thumbnail_id', '_wp_page_template' ) ) ) {
-      // Allow some specific meta keys that start with underscore
-      if ( ! apply_filters( "mtphr_post_duplicator_meta_{$key}_enabled", false ) ) {
-        continue;
-      }
+    // Skip excluded meta keys
+    if ( in_array( $key, $excluded_meta_keys, true ) ) {
+      continue;
     }
     
-    // Check if meta is enabled via filter
+    // Check if meta is enabled via filter (defaults to true for all meta keys, including those starting with "_")
     if ( ! apply_filters( "mtphr_post_duplicator_meta_{$key}_enabled", true ) ) {
       continue;
     }
@@ -185,15 +211,107 @@ function get_post_data( $request ) {
 }
 
 /**
+ * Get full post data including title, slug, date, author, parent, featured image
+ * Works for all post types regardless of show_in_rest setting
+ */
+function get_post_full_data( $request ) {
+  $post_id = $request->get_param( 'id' );
+  $post = get_post( $post_id );
+  
+  if ( ! $post ) {
+    return new \WP_Error( 'post_not_found', esc_html__( 'Post not found.', 'post-duplicator' ), array( 'status' => 404 ) );
+  }
+  
+  // Get author name
+  $author_name = 'Unknown Author';
+  if ( $post->post_author && $post->post_author > 0 ) {
+    $author = get_userdata( $post->post_author );
+    if ( $author ) {
+      $author_name = $author->display_name;
+    }
+  }
+  
+  // Get featured image data
+  $featured_image = null;
+  $featured_media_id = get_post_thumbnail_id( $post_id );
+  if ( $featured_media_id && $featured_media_id > 0 ) {
+    $attachment = get_post( $featured_media_id );
+    if ( $attachment && wp_attachment_is_image( $featured_media_id ) ) {
+      $image_url = wp_get_attachment_image_url( $featured_media_id, 'full' );
+      $thumbnail_url = wp_get_attachment_image_url( $featured_media_id, 'thumbnail' );
+      $alt_text = get_post_meta( $featured_media_id, '_wp_attachment_image_alt', true );
+      
+      $featured_image = array(
+        'id' => $featured_media_id,
+        'url' => $image_url ? $image_url : '',
+        'thumbnail' => $thumbnail_url ? $thumbnail_url : $image_url,
+        'alt' => $alt_text ? $alt_text : '',
+      );
+    }
+  }
+  
+  // Get parent post data if available
+  $parent_post = null;
+  if ( $post->post_parent && $post->post_parent > 0 ) {
+    $parent = get_post( $post->post_parent );
+    if ( $parent ) {
+      $parent_post = array(
+        'id' => $parent->ID,
+        'title' => $parent->post_title,
+      );
+    }
+  }
+  
+  return rest_ensure_response( array(
+    'id' => $post->ID,
+    'title' => $post->post_title,
+    'type' => $post->post_type,
+    'status' => $post->post_status,
+    'slug' => $post->post_name,
+    'date' => $post->post_date,
+    'author' => $author_name,
+    'authorId' => $post->post_author,
+    'parent' => $post->post_parent || 0,
+    'parentPost' => $parent_post,
+    'featuredImage' => $featured_image,
+  ) );
+}
+
+/**
+ * Permission check for getting parent posts
+ */
+function get_parent_posts_permissions( $request ) {
+  // User must be logged in and have edit capabilities
+  if ( ! is_user_logged_in() ) {
+    return new \WP_Error( 'not_logged_in', esc_html__( 'You must be logged in to access this endpoint.', 'post-duplicator' ), array( 'status' => 401 ) );
+  }
+  
+  // Check if user has edit capabilities
+  if ( ! current_user_can( 'edit_posts' ) ) {
+    return new \WP_Error( 'no_permission', esc_html__( 'You do not have permission to access this endpoint.', 'post-duplicator' ), array( 'status' => 403 ) );
+  }
+  
+  return true;
+}
+
+/**
  * Get available parent posts for a post type (hierarchical)
  */
 function get_parent_posts( $request ) {
   $post_type = $request->get_param( 'post_type' );
   $exclude_id = $request->get_param( 'exclude_id' );
   
-  if ( ! $post_type ) {
-    // Default to 'page' if no post type specified
+  // Validate and sanitize post type
+  if ( ! $post_type || ! post_type_exists( $post_type ) ) {
+    // Default to 'page' if no valid post type specified
     $post_type = 'page';
+  } else {
+    $post_type = sanitize_key( $post_type );
+  }
+  
+  // Validate and sanitize exclude_id
+  if ( $exclude_id ) {
+    $exclude_id = absint( $exclude_id );
   }
   
   // Get posts that can be parents (same post type, published or draft)
@@ -206,8 +324,8 @@ function get_parent_posts( $request ) {
   );
   
   // Exclude the current post (can't be its own parent)
-  if ( $exclude_id ) {
-    $args['post__not_in'] = array( intval( $exclude_id ) );
+  if ( $exclude_id && $exclude_id > 0 ) {
+    $args['post__not_in'] = array( $exclude_id );
   }
   
   $posts = get_posts( $args );
@@ -225,8 +343,8 @@ function get_parent_posts( $request ) {
   
   // Build hierarchical structure and collect descendants of excluded post
   $excluded_descendants = array();
-  if ( $exclude_id ) {
-    $exclude_id_int = intval( $exclude_id );
+  if ( $exclude_id && $exclude_id > 0 ) {
+    $exclude_id_int = $exclude_id;
     // Recursively find all descendants of the excluded post from the full post list
     // We need to query all posts to find descendants, not just the ones we're showing
     $all_posts_args = array(
@@ -304,10 +422,90 @@ function get_parent_posts( $request ) {
 }
 
 /**
+ * Check if a meta value contains HTML and should be sanitized with wp_kses_post
+ * 
+ * @param string $meta_value The meta value to check
+ * @param string $meta_key The meta key
+ * @param int $post_id The post ID (optional, for ACF field detection)
+ * @return bool True if the value contains HTML
+ */
+function meta_value_contains_html( $meta_value, $meta_key = '', $post_id = 0 ) {
+	// Check if value is empty or not a string
+	if ( empty( $meta_value ) || ! is_string( $meta_value ) ) {
+		return false;
+	}
+	
+	// First, check if value contains HTML tags (most reliable method)
+	// Use trim to handle whitespace-only differences
+	$stripped = strip_tags( trim( $meta_value ) );
+	$trimmed_original = trim( $meta_value );
+	if ( $stripped !== $trimmed_original && strlen( $trimmed_original ) > strlen( $stripped ) ) {
+		// Contains HTML tags - the stripped version is shorter, meaning tags were removed
+		return true;
+	}
+	
+	// Check if ACF is active and this might be an ACF WYSIWYG field
+	if ( function_exists( 'acf_get_field' ) && $post_id > 0 && ! empty( $meta_key ) ) {
+		// For ACF flexible content fields, check if there's a corresponding field key
+		// Pattern: fieldname_0_subfieldname -> _fieldname_0_subfieldname contains field key
+		$field_key_meta = '_' . $meta_key;
+		$field_key = get_post_meta( $post_id, $field_key_meta, true );
+		
+		if ( ! empty( $field_key ) && strpos( $field_key, 'field_' ) === 0 ) {
+			// This is an ACF field, check its type
+			$field = acf_get_field( $field_key );
+			if ( $field && isset( $field['type'] ) ) {
+				// Check for WYSIWYG and other HTML-capable field types
+				$html_field_types = array( 'wysiwyg', 'textarea', 'oembed', 'url' );
+				if ( in_array( $field['type'], $html_field_types, true ) ) {
+					return true;
+				}
+			}
+		}
+		
+		// Also check for common ACF field name patterns that indicate HTML content
+		// Patterns like: *_editor_*, *_wysiwyg_*, *_html_*, *_content_*
+		$html_patterns = array( 'editor', 'wysiwyg', 'html', 'content', 'description', 'text' );
+		foreach ( $html_patterns as $pattern ) {
+			if ( stripos( $meta_key, $pattern ) !== false ) {
+				// Check if this is actually an ACF field by looking for the field key
+				$field_key_meta = '_' . $meta_key;
+				$field_key = get_post_meta( $post_id, $field_key_meta, true );
+				if ( ! empty( $field_key ) && strpos( $field_key, 'field_' ) === 0 ) {
+					return true;
+				}
+			}
+		}
+	}
+	
+	return false;
+}
+
+/**
+ * Sanitize meta value appropriately based on content type
+ * 
+ * @param string $meta_value The meta value to sanitize
+ * @param string $meta_key The meta key
+ * @param int $post_id The post ID (optional, for ACF field detection)
+ * @return string Sanitized meta value
+ */
+function sanitize_meta_value( $meta_value, $meta_key = '', $post_id = 0 ) {
+	// Check if value contains HTML
+	if ( meta_value_contains_html( $meta_value, $meta_key, $post_id ) ) {
+		// Use wp_kses_post to preserve HTML but sanitize it
+		// wp_kses_post sanitizes HTML while preserving allowed tags
+		// $wpdb->insert() handles escaping automatically via prepared statements
+		return wp_kses_post( $meta_value );
+	}
+	
+	// Default to sanitize_text_field for plain text
+	return sanitize_text_field( $meta_value );
+}
+
+/**
  * Duplicate a post
  */
 function duplicate_post_permissions( $request ) {
-  $args = $request->get_params();
   $data = $request->get_json_params();
   $original_id = isset( $data['original_id'] ) ? $data['original_id'] : false;
 
@@ -315,7 +513,17 @@ function duplicate_post_permissions( $request ) {
     return new \WP_Error( 'no_original_id', esc_html__( 'No original id passed.', 'post-duplicator' ), array( 'status' => 403 ) );
   }
 
+  // Validate original_id is a positive integer
+  $original_id = absint( $original_id );
+  if ( ! $original_id || $original_id <= 0 ) {
+    return new \WP_Error( 'invalid_original_id', esc_html__( 'Invalid original id.', 'post-duplicator' ), array( 'status' => 403 ) );
+  }
+
   $post = get_post( $original_id );
+  if ( ! $post ) {
+    return new \WP_Error( 'post_not_found', esc_html__( 'Post not found.', 'post-duplicator' ), array( 'status' => 404 ) );
+  }
+
   if ( ! user_can_duplicate( $post ) ) {
 	  return new \WP_Error( 'no_permission', esc_html__( 'User does not have permission to duplicate post.', 'post-duplicator' ), array( 'status' => 403 ) );
 	}
@@ -327,14 +535,17 @@ function duplicate_post_permissions( $request ) {
  * Duplicate a post
  */
 function duplicate_post( $request ) {
-  $args = $request->get_params();
   $data = $request->get_json_params();
 
   // Get access to the database
 	global $wpdb;
 
-  // Get the original id
-  $original_id = $data['original_id'];
+  // Get and validate the original id
+  $original_id = isset( $data['original_id'] ) ? absint( $data['original_id'] ) : 0;
+  
+  if ( ! $original_id || $original_id <= 0 ) {
+    return new \WP_Error( 'invalid_original_id', esc_html__( 'Invalid original id.', 'post-duplicator' ), array( 'status' => 400 ) );
+  }
 	
 	// Get the original post object
 	$orig = get_post( $original_id );
@@ -395,9 +606,16 @@ function duplicate_post( $request ) {
 		$duplicate['post_name'] = sanitize_title( $duplicate['post_name'] . '-' . $settings['slug'] );
 	}
 	
-	// Set the status
+	// Set the status - validate against allowed statuses
 	if( $settings['status'] != 'same' ) {
-		$duplicate['post_status'] = sanitize_text_field( $settings['status'] );
+		$allowed_statuses = array( 'draft', 'publish', 'pending', 'private', 'future' );
+		$requested_status = sanitize_text_field( $settings['status'] );
+		if ( in_array( $requested_status, $allowed_statuses, true ) ) {
+			$duplicate['post_status'] = $requested_status;
+		} else {
+			// Invalid status, default to draft
+			$duplicate['post_status'] = 'draft';
+		}
 	}
 	
 	// Check if a user has publish get_post_type_capabilities. If not, make sure they can't _publish
@@ -408,9 +626,16 @@ function duplicate_post( $request ) {
 		}
 	}
 	
-	// Set the type
+	// Set the type - validate against allowed post types
 	if( $settings['type'] != 'same' ) {
-		$duplicate['post_type'] = sanitize_text_field( $settings['type'] );
+		$requested_type = sanitize_key( $settings['type'] );
+		// Validate that the post type exists and user has permission to create it
+		if ( post_type_exists( $requested_type ) && current_user_can( get_post_type_object( $requested_type )->cap->create_posts ) ) {
+			$duplicate['post_type'] = $requested_type;
+		} else {
+			// Invalid post type or no permission, keep original type
+			$duplicate['post_type'] = $orig->post_type;
+		}
 	}
 	
 	// Set the parent - check for selectedParentId first, otherwise keep original parent
@@ -538,12 +763,33 @@ function duplicate_post( $request ) {
 				if ( ! is_array( $term_ids ) ) {
 					continue;
 				}
+				
+				// Validate taxonomy slug
+				$taxonomy_slug = sanitize_key( $taxonomy_slug );
+				if ( ! taxonomy_exists( $taxonomy_slug ) ) {
+					continue; // Skip invalid taxonomy
+				}
+				
+				// Verify taxonomy is registered for this post type
+				if ( ! is_object_in_taxonomy( $duplicate['post_type'], $taxonomy_slug ) ) {
+					continue; // Skip taxonomies not registered for this post type
+				}
+				
 				// Convert term IDs to integers and filter out invalid values
-				$term_ids = array_map( 'intval', $term_ids );
+				$term_ids = array_map( 'absint', $term_ids );
 				$term_ids = array_filter( $term_ids );
 				
-				if ( ! empty( $term_ids ) ) {
-					wp_set_object_terms( $duplicate_id, $term_ids, $taxonomy_slug );
+				// Verify all term IDs exist and belong to the correct taxonomy
+				$valid_term_ids = array();
+				foreach ( $term_ids as $term_id ) {
+					$term = get_term( $term_id, $taxonomy_slug );
+					if ( $term && ! is_wp_error( $term ) ) {
+						$valid_term_ids[] = $term_id;
+					}
+				}
+				
+				if ( ! empty( $valid_term_ids ) ) {
+					wp_set_object_terms( $duplicate_id, $valid_term_ids, $taxonomy_slug );
 				}
 			}
 		} elseif ( ! isset( $settings['taxonomyData'] ) ) {
@@ -586,19 +832,58 @@ function duplicate_post( $request ) {
 		// Use provided custom meta data if available, otherwise fetch from original post
 		if ( isset( $settings['customMetaData'] ) && is_array( $settings['customMetaData'] ) ) {
 			// Use provided custom meta data
+			$excluded_meta_keys = get_excluded_meta_keys();
 			foreach ( $settings['customMetaData'] as $meta_item ) {
 				if ( ! isset( $meta_item['key'] ) || ! isset( $meta_item['value'] ) ) {
 					continue;
 				}
 				
-				$meta_key = sanitize_text_field( $meta_item['key'] );
+				$meta_key = sanitize_key( $meta_item['key'] );
+				
+				// Validate meta key is not empty and follows WordPress naming conventions
+				if ( empty( $meta_key ) || strlen( $meta_key ) > 255 ) {
+					continue; // Skip invalid meta keys
+				}
+				
+				// Skip excluded meta keys
+				if ( in_array( $meta_key, $excluded_meta_keys, true ) ) {
+					continue;
+				}
+				
+				// Prefer originalValue if available - it contains the raw value from the database
+				// This ensures we preserve HTML that might have been processed/stripped in the frontend
 				$meta_value = $meta_item['value'];
+				$use_original = false;
+				
+				if ( isset( $meta_item['originalValue'] ) && ! empty( $meta_item['originalValue'] ) && is_string( $meta_item['originalValue'] ) ) {
+					// Check if this is an ACF WYSIWYG field - if so, always use originalValue
+					if ( function_exists( 'acf_get_field' ) && $original_id > 0 ) {
+						$field_key_meta = '_' . $meta_key;
+						$field_key = get_post_meta( $original_id, $field_key_meta, true );
+						if ( ! empty( $field_key ) && strpos( $field_key, 'field_' ) === 0 ) {
+							$field = acf_get_field( $field_key );
+							if ( $field && isset( $field['type'] ) && $field['type'] === 'wysiwyg' ) {
+								// This is a WYSIWYG field, always use originalValue
+								$use_original = true;
+							}
+						}
+					}
+					
+					// Also check if originalValue contains HTML
+					if ( ! $use_original && meta_value_contains_html( $meta_item['originalValue'], $meta_key, $original_id ) ) {
+						$use_original = true;
+					}
+					
+					if ( $use_original ) {
+						$meta_value = $meta_item['originalValue'];
+					}
+				}
 				
 				// Handle data type preservation
 				if ( isset( $meta_item['type'] ) && isset( $meta_item['isSerialized'] ) ) {
-					// If it was originally serialized or is array/object, serialize it
-					if ( $meta_item['isSerialized'] || in_array( $meta_item['type'], array( 'array', 'object' ) ) ) {
-						// Try to decode JSON first if it's a JSON string
+					if ( $meta_item['isSerialized'] ) {
+						// It was originally serialized, so serialize it again
+						// Try to decode JSON first if it's a JSON string (from the modal)
 						$json_decoded = json_decode( $meta_value, true );
 						if ( json_last_error() === JSON_ERROR_NONE ) {
 							$meta_value = maybe_serialize( $json_decoded );
@@ -606,16 +891,29 @@ function duplicate_post( $request ) {
 							// Already a string, serialize it
 							$meta_value = maybe_serialize( $meta_value );
 						}
+					} elseif ( in_array( $meta_item['type'], array( 'array', 'object' ) ) ) {
+						// It was originally a JSON string (not serialized), so keep it as JSON
+						// Validate it's valid JSON - if valid, keep as-is to preserve exact format
+						// Only re-encode if necessary (e.g., if user modified it in the modal)
+						$json_decoded = json_decode( $meta_value, true );
+						if ( json_last_error() === JSON_ERROR_NONE ) {
+							// Valid JSON - re-encode to ensure it's properly formatted
+							// Use wp_json_encode which handles WordPress-specific encoding
+							$meta_value = wp_json_encode( $json_decoded );
+						} else {
+							// Invalid JSON, sanitize appropriately (may contain HTML)
+							$meta_value = sanitize_meta_value( $meta_value, $meta_key, $original_id );
+						}
 					} elseif ( $meta_item['type'] === 'number' ) {
 						// Preserve as number (WordPress will store as string anyway, but we can validate)
 						$meta_value = is_numeric( $meta_value ) ? $meta_value : sanitize_text_field( $meta_value );
 					} else {
-						// String type
-						$meta_value = sanitize_text_field( $meta_value );
+						// String type - check if it contains HTML (e.g., ACF WYSIWYG fields)
+						$meta_value = sanitize_meta_value( $meta_value, $meta_key, $original_id );
 					}
 				} else {
-					// Fallback: sanitize as text
-					$meta_value = sanitize_text_field( $meta_value );
+					// Fallback: sanitize appropriately (may contain HTML)
+					$meta_value = sanitize_meta_value( $meta_value, $meta_key, $original_id );
 				}
 				
 				// Apply filters
@@ -640,13 +938,21 @@ function duplicate_post( $request ) {
 		} else {
 			// Fall back to original behavior: duplicate all custom fields
 			$custom_fields = get_post_custom( $original_id );
+			$excluded_meta_keys = get_excluded_meta_keys();
 			foreach ( $custom_fields as $key => $value ) {
+				// Skip excluded meta keys
+				if ( in_array( $key, $excluded_meta_keys, true ) ) {
+					continue;
+				}
+				
 				if( is_array($value) && count($value) > 0 ) {
 					foreach( $value as $i=>$v ) {
 						if ( ! apply_filters( "mtphr_post_duplicator_meta_{$key}_enabled", true ) ) {
 							continue;
 						}
-						$meta_value = apply_filters( "mtphr_post_duplicator_meta_value", $v, $key, $duplicate_id, $duplicate['post_type'] );
+						// Sanitize meta value appropriately (may contain HTML for ACF WYSIWYG fields)
+						$meta_value = sanitize_meta_value( $v, $key, $original_id );
+						$meta_value = apply_filters( "mtphr_post_duplicator_meta_value", $meta_value, $key, $duplicate_id, $duplicate['post_type'] );
 						$data = array(
 							'post_id' 		=> intval( $duplicate_id ),
 							'meta_key' 		=> sanitize_text_field( $key ),
