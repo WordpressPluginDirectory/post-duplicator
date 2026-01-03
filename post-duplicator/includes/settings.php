@@ -53,6 +53,15 @@ function initialize_settings() {
   ] );
 
   Settings::section( [
+    'id' => 'mtphr_post_duplicator_post_types',
+    'slug' => 'post_types',
+    'label' => __( 'Post Types', 'post-duplicator' ),
+    'option' => 'mtphr_post_duplicator_settings',
+    'menu_slug' => 'mtphr_post_duplicator',
+    'parent_slug' => 'options-general.php',
+  ] );
+
+  Settings::section( [
     'id' => 'mtphr_post_duplicator_permissions',
     'slug' => 'permissions',
     'label' => __( 'Permissions', 'post-duplicator' ),
@@ -92,6 +101,7 @@ function initialize_settings() {
     'duplicate_other_private' => 'enabled',
     'duplicate_other_password' => 'enabled',
     'duplicate_other_future' => 'enabled',
+    'post_types_config' => get_default_post_types_config(),
   ] );
   Settings::default_values( 'disabled',
     user_roles_and_capabilities( 'defaults' )
@@ -370,6 +380,37 @@ function initialize_fields() {
   ] );
 
   Settings::fields( [
+    'section' => 'mtphr_post_duplicator_post_types',
+    'fields'  => [
+      [
+        'type'    => 'heading',
+        'label'   => __( 'Post Types Configuration', 'post-duplicator' ),
+        'help'    => __( 'Configure which post types can be duplicated and which appear in the "Post Type" dropdown menu.', 'post-duplicator' ),
+      ],
+      [
+        'type'    => 'options_matrix',
+        'id'      => 'post_types_config',
+        'item_label' => false,
+        'items'   => get_all_post_types( 'slug' ),
+        'options' => [
+          [
+            'key'   => 'allow_duplication',
+            'type'  => 'checkbox',
+            'label' => __( 'Allow Duplication', 'post-duplicator' ),
+            'help' => __( 'Allow this post type to be duplicated.', 'post-duplicator' ),
+          ],
+          [
+            'key'   => 'allow_in_dropdown',
+            'type'  => 'checkbox',
+            'label' => __( 'Allow Switch', 'post-duplicator' ),
+            'help' => __( 'Allow duplicated posts to be switched to this post type.', 'post-duplicator' ),
+          ],
+        ],
+      ],
+    ],
+  ] );
+
+  Settings::fields( [
     'section' => 'mtphr_post_duplicator_permissions',
     'fields'  => [
       [
@@ -547,10 +588,10 @@ function update_capabilities( $value, $key, $option, $type ) {
   if ( 'update' == $type ) {
     $role = get_role( $key );
     $active_capabilities = get_active_capabilities( $role );
-    $capability_value = is_array( $value ) ? $value : [];;
-
+    $capability_value = is_array( $value ) ? $value : [];
     $added_capabilities = array_diff( $capability_value, $active_capabilities );
     $removed_capabilities = array_diff( $active_capabilities, $capability_value );
+
     if ( is_array( $added_capabilities ) && count( $added_capabilities ) > 0 ) {
       foreach ( $added_capabilities as $added_capability ) {
         $role->add_cap( esc_attr( $added_capability ) );
@@ -563,4 +604,24 @@ function update_capabilities( $value, $key, $option, $type ) {
     }
   }
   return $value;
+}
+
+/**
+ * Get default post types configuration
+ * All post types enabled for duplication, only post and page for dropdown
+ * 
+ * @return array Default configuration
+ */
+function get_default_post_types_config() {
+  $all_types = get_all_post_types();
+  $config = array();
+  
+  foreach ( $all_types as $type ) {
+    $config[ $type['id'] ] = array(
+      'allow_duplication' => true,
+      'allow_in_dropdown' => in_array( $type['id'], array( 'post', 'page' ) ),
+    );
+  }
+  
+  return $config;
 }
