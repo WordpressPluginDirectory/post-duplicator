@@ -4,7 +4,7 @@ Tags: posts, post, duplicate, duplication
 Requires at least: 6.6
 Requires PHP: 7.4
 Tested up to: 6.9.1
-Stable tag: 3.0.8
+Stable tag: 3.0.9
 License: GPL2
 
 Creates functionality to duplicate any and all post types, including taxonomies & custom fields. Perfect for developers and content creators.
@@ -310,6 +310,13 @@ The settings page includes four tabs:
 
 == Changelog ==
 
+= 3.0.9 [2025-02-17] =
+* WP Nested Pages: pass parent page to duplicates in Basic mode and modal, validate parent post type on save, and use cache-busting refresh so clones appear in list
+* Simple Custom Post Order integration: assign unique menu_order to duplicates to prevent order scrambling on page refresh
+* Security: Fix unauthorized arbitrary protected post meta insertion vulnerability by validating meta keys against original post and using original values only for protected meta
+* Fix: ACF Flexible Content and other protected meta fields now copy correctly when duplicating
+* Restore: User-edited custom meta values (non-protected) are now copied when duplicating via the modal
+
 = 3.0.8 [2025-02-07] =
 * View Post button now uses get_permalink() for reliable URLs on sites with custom permalink structures
 
@@ -541,4 +548,4 @@ Must upgrade in order for the plugin to work. The file paths where initially wro
 
 == Upgrade Notice ==
 
-View Post button now uses get_permalink() for reliable URLs on sites with custom permalink structures
+Improves duplication reliability with better WP Nested Pages parent handling/refresh behavior and a new Simple Custom Post Order compatibility fix to preserve menu order.
